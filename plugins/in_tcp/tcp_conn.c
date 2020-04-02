@@ -28,6 +28,8 @@
 #include "tcp.h"
 #include "tcp_conn.h"
 
+static int gelf_remove_leading_underscores(msgpack_object * map, struct flb_in_tcp_config *ctx);
+
 static inline void consume_bytes(char *buf, int bytes, int length)
 {
     memmove(buf, buf + bytes, length - bytes);
@@ -55,6 +57,7 @@ static inline int process_pack(struct tcp_conn *conn,
         flb_pack_time_now(&mp_pck);
 
         if (entry.type == MSGPACK_OBJECT_MAP) {
+            gelf_remove_leading_underscores(&entry, conn->ctx);
             msgpack_pack_object(&mp_pck, entry);
         }
         else if (entry.type == MSGPACK_OBJECT_ARRAY) {
@@ -85,6 +88,14 @@ static ssize_t parse_payload_json(struct tcp_conn *conn)
     int ret;
     int out_size;
     char *pack;
+    char *p;
+
+    if (conn->ctx->format == FLB_TCP_FMT_GELF) {
+        while ((p = memchr(conn->buf_data, '\0', conn->buf_len))) {
+            flb_plg_trace(conn->ctx->ins, "gelf format: clear null byte at position %d", p-conn->buf_data );
+            *p = ' ';
+        }
+    }
 
     ret = flb_pack_json_state(conn->buf_data, conn->buf_len,
                               &pack, &out_size, &conn->pack_state);
@@ -223,7 +234,7 @@ int tcp_conn_event(void *data)
         }
 
         /* JSON Format handler */
-        if (ctx->format == FLB_TCP_FMT_JSON) {
+        if (ctx->format == FLB_TCP_FMT_JSON || ctx->format == FLB_TCP_FMT_GELF) {
             ret_payload = parse_payload_json(conn);
             if (ret_payload == 0) {
                 /* Incomplete JSON message, we need more data */
@@ -251,7 +262,7 @@ int tcp_conn_event(void *data)
         conn->buf_len -= ret_payload;
         conn->buf_data[conn->buf_len] = '\0';
 
-        if (ctx->format == FLB_TCP_FMT_JSON) {
+        if (ctx->format == FLB_TCP_FMT_JSON || ctx->format == FLB_TCP_FMT_GELF) {
             jsmn_init(&conn->pack_state.parser);
             conn->pack_state.tokens_count = 0;
             conn->pack_state.last_byte = 0;
@@ -309,7 +320,7 @@ struct tcp_conn *tcp_conn_add(int fd, struct flb_in_tcp_config *ctx)
     conn->ins      = ctx->ins;
 
     /* Initialize JSON parser */
-    if (ctx->format == FLB_TCP_FMT_JSON) {
+    if (ctx->format == FLB_TCP_FMT_JSON || ctx->format == FLB_TCP_FMT_GELF) {
         flb_pack_state_init(&conn->pack_state);
         conn->pack_state.multiple = FLB_TRUE;
     }
@@ -335,7 +346,7 @@ int tcp_conn_del(struct tcp_conn *conn)
 
     ctx = conn->ctx;
 
-    if (ctx->format == FLB_TCP_FMT_JSON) {
+    if (ctx->format == FLB_TCP_FMT_JSON || ctx->format == FLB_TCP_FMT_GELF) {
         flb_pack_state_reset(&conn->pack_state);
     }
     /* Unregister the file descriptior from the event-loop */
@@ -347,5 +358,34 @@ int tcp_conn_del(struct tcp_conn *conn)
     flb_free(conn->buf_data);
     flb_free(conn);
 
+    return 0;
+}
+
+static int gelf_remove_leading_underscores(msgpack_object * map, struct flb_in_tcp_config *ctx)
+{
+    int i;
+    msgpack_object key;
+    char *ptr;
+    size_t size;
+
+    if (map->type != MSGPACK_OBJECT_MAP) {
+        return 0;
+    }
+
+    for (i = 0; i < map->via.map.size; i++) {
+        key = map->via.map.ptr[i].key;
+        if (key.type != MSGPACK_OBJECT_STR) {
+            continue;
+        }
+        ptr = key.via.str.ptr;
+        size = key.via.str.size;
+
+        if (size > 1 && ptr[0] == '_') {
+            flb_plg_debug(ctx->ins, "gelf format: stripping underscore from key name (%*.*s)",
+                          size, size, ptr);
+            snprintf(ptr, size-1, "%s", ptr+1);
+            key.via.str.size--;
+        }
+    }
     return 0;
 }

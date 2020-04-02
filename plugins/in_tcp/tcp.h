@@ -23,6 +23,7 @@
 
 #define FLB_TCP_FMT_JSON    0  /* default */
 #define FLB_TCP_FMT_NONE    1  /* no format, use delimiters */
+#define FLB_TCP_FMT_GELF    2  /* GELF */
 
 #include <fluent-bit/flb_input.h>
 #include <fluent-bit/flb_sds.h>

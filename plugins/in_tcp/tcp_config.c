@@ -57,6 +57,9 @@ struct flb_in_tcp_config *tcp_config_init(struct flb_input_instance *ins)
         else if (strcasecmp(tmp, "none") == 0) {
             ctx->format = FLB_TCP_FMT_NONE;
         }
+        else if (strcasecmp(tmp, "gelf") == 0) {
+            ctx->format = FLB_TCP_FMT_GELF;
+        }
         else {
             flb_plg_error(ctx->ins, "unrecognized format value '%s'", tmp);
             flb_free(ctx);
